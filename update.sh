@@ -2,7 +2,10 @@
 #
 # Copyright (C) 2025 ZqinKing
 #
-# 最终修正版 - 修复 OpenClash 不显示的问题
+# 最终修正完整版 for zn_m2
+# 修复: OpenClash 缺失问题 (通过调整执行顺序和强制修复 Makefile)
+# 保留: OpenClash, UPnP, Ttyd, Vlmcsd, NSS 完整优化
+# 移除: Passwall, AdGuardHome, HomeProxy, Docker, USB, iStore
 #
 
 set -e
@@ -87,22 +90,29 @@ update_feeds() {
         touch "$BUILD_DIR/include/bpf.mk"
     fi
 
-    # 更新 feeds
+    # 更新 feeds (仅下载，暂不安装)
     ./scripts/feeds update -a
 }
 
 remove_unwanted_packages() {
-    # 强制移除不想要的包
+    echo "正在清理不需要的软件包和冲突..."
+    
+    # 1. 解决 OpenClash 冲突：删除 feeds/luci 下的版本，确保使用 feeds/small8 下的版本
+    if [ -d "./feeds/luci/applications/luci-app-openclash" ]; then
+        echo "移除 feeds/luci 中的 OpenClash 以解决冲突"
+        rm -rf "./feeds/luci/applications/luci-app-openclash"
+    fi
+
+    # 2. 移除不需要的巨型插件
     local unwanted_packages=(
         "luci-app-passwall" "luci-app-homeproxy" "luci-app-nikki"
         "luci-app-adguardhome" "adguardhome"
         "luci-app-lucky" "lucky"
         "luci-app-smartdns" "smartdns"
-        "luci-app-diskman" "diskman" "parted"
-        "luci-app-dockerman" "docker" "dockerd"
+        "luci-app-diskman" "diskman" "parted" # USB/磁盘
+        "luci-app-dockerman" "docker" "dockerd" # Docker
         "luci-app-alist" "alist"
-        "luci-app-openclash" # 先删旧版，后面重装
-        "luci-app-store" "luci-app-quickstart"
+        "luci-app-store" "luci-app-quickstart" # iStore
         "luci-app-timecontrol" "luci-app-gecoosac"
     )
 
@@ -110,12 +120,36 @@ remove_unwanted_packages() {
         find ./feeds -name "$pkg" -type d -exec rm -rf {} +
     done
 
+    # 移除 istore 目录
     if [[ -d ./package/istore ]]; then
         \rm -rf ./package/istore
     fi
     
+    # 清理 USB 自动挂载脚本
     if [ -d "$BUILD_DIR/target/linux/qualcommax/base-files/etc/uci-defaults" ]; then
         find "$BUILD_DIR/target/linux/qualcommax/base-files/etc/uci-defaults/" -type f -name "99*.sh" -exec rm -f {} +
+    fi
+}
+
+# ！！！核心修复：必须在 remove_unwanted_packages 之后，install_feeds 之前运行！！！
+fix_mkpkg_format_invalid() {
+    echo "正在检查 OpenClash Makefile 格式..."
+    local oc_mk="$BUILD_DIR/feeds/small8/luci-app-openclash/Makefile"
+    
+    if [ -f "$oc_mk" ]; then
+        # 强制将 beta 改为 1
+        sed -i 's/PKG_RELEASE:=beta/PKG_RELEASE:=1/g' "$oc_mk"
+        echo "已修复 OpenClash 版本号 (beta -> 1)"
+    else
+        echo "警告：未找到 $oc_mk"
+    fi
+
+    # 修复其他可能导致错误的包
+    if [ -f $BUILD_DIR/feeds/small8/v2ray-geodata/Makefile ]; then
+        sed -i 's/VER)-\$(PKG_RELEASE)/VER)-r\$(PKG_RELEASE)/g' $BUILD_DIR/feeds/small8/v2ray-geodata/Makefile
+    fi
+    if [ -f $BUILD_DIR/feeds/small8/luci-lib-taskd/Makefile ]; then
+        sed -i 's/>=1\.0\.3-1/>=1\.0\.3-r1/g' $BUILD_DIR/feeds/small8/luci-lib-taskd/Makefile
     fi
 }
 
@@ -131,6 +165,7 @@ update_golang() {
 }
 
 install_small8() {
+    # 强制安装 OpenClash 及其依赖
     ./scripts/feeds install -p small8 -f luci-app-openclash
     ./scripts/feeds install -p small8 -f xray-core xray-plugin sing-box
     ./scripts/feeds install -p small8 -f fullconenat-nft fullconenat
@@ -145,6 +180,7 @@ install_fullconenat() {
     fi
 }
 
+# 主安装函数
 install_feeds() {
     ./scripts/feeds update -i
     for dir in $BUILD_DIR/feeds/*; do
@@ -153,6 +189,7 @@ install_feeds() {
                 install_small8
                 install_fullconenat
             else
+                # 强制安装其他所有 feeds
                 ./scripts/feeds install -f -ap $(basename "$dir")
             fi
         fi
@@ -183,6 +220,7 @@ fix_default_set() {
     install -Dm544 "$BASE_PATH/patches/990_set_argon_primary" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/990_set_argon_primary"
     install -Dm544 "$BASE_PATH/patches/991_custom_settings" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/991_custom_settings"
     install -Dm544 "$BASE_PATH/patches/992_set-wifi-uci.sh" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/992_set-wifi-uci.sh"
+
     if [ -f "$BUILD_DIR/package/emortal/autocore/files/tempinfo" ]; then
         if [ -f "$BASE_PATH/patches/tempinfo" ]; then
             \cp -f "$BASE_PATH/patches/tempinfo" "$BUILD_DIR/package/emortal/autocore/files/tempinfo"
@@ -218,6 +256,7 @@ update_default_lan_addr() {
     fi
 }
 
+# NSS 相关函数保留
 remove_something_nss_kmod() {
     local ipq_mk_path="$BUILD_DIR/target/linux/qualcommax/Makefile"
     local target_mks=("$BUILD_DIR/target/linux/qualcommax/ipq60xx/target.mk" "$BUILD_DIR/target/linux/qualcommax/ipq807x/target.mk")
@@ -261,21 +300,6 @@ update_ath11k_fw() {
             exit 1
         fi
         mv -f "$new_mk" "$makefile"
-    fi
-}
-
-# ！！！核心修复点！！！
-# 这里去掉了 if 判断，强制执行修复
-fix_mkpkg_format_invalid() {
-    if [ -f $BUILD_DIR/feeds/small8/luci-app-openclash/Makefile ]; then
-        echo "正在修复 OpenClash Makefile 版本号问题..."
-        sed -i 's/PKG_RELEASE:=beta/PKG_RELEASE:=1/g' $BUILD_DIR/feeds/small8/luci-app-openclash/Makefile
-    fi
-    if [ -f $BUILD_DIR/feeds/small8/v2ray-geodata/Makefile ]; then
-        sed -i 's/VER)-\$(PKG_RELEASE)/VER)-r\$(PKG_RELEASE)/g' $BUILD_DIR/feeds/small8/v2ray-geodata/Makefile
-    fi
-    if [ -f $BUILD_DIR/feeds/small8/luci-lib-taskd/Makefile ]; then
-        sed -i 's/>=1\.0\.3-1/>=1\.0\.3-r1/g' $BUILD_DIR/feeds/small8/luci-lib-taskd/Makefile
     fi
 }
 
@@ -490,15 +514,20 @@ update_script_priority() {
     if [ -d "${pbuf_path%/*}" ] && [ -f "$pbuf_path" ]; then sed -i 's/START=.*/START=89/g' "$pbuf_path"; fi
 }
 
+# 主执行流程
 main() {
     clone_repo
     clean_up
     reset_feeds_conf
-    update_feeds
-    remove_unwanted_packages
-    remove_tweaked_packages
     
-    # 核心系统修复与 NSS 调整
+    # 1. 仅下载 feeds (Update)
+    update_feeds 
+    
+    # 2. 关键步骤：清理冲突和修复格式 (必须在 Install 之前)
+    remove_unwanted_packages
+    fix_mkpkg_format_invalid
+    
+    # 3. 基础设置修复
     fix_default_set
     fix_miniupnpd
     update_golang
@@ -506,6 +535,7 @@ main() {
     fix_mk_def_depends
     update_default_lan_addr
     
+    # 4. NSS 调整
     remove_something_nss_kmod 
     update_affinity_script
     update_ath11k_fw
@@ -513,10 +543,8 @@ main() {
     update_nss_diag
     update_script_priority
     
-    # 修复 OpenClash Makefile 格式
-    fix_mkpkg_format_invalid
+    # 5. 其他调整
     change_cpuusage
-    
     add_ax6600_led
     set_custom_task
     set_build_signature
@@ -533,6 +561,7 @@ main() {
     fix_easytier_mk
     remove_attendedsysupgrade
     
+    # 6. 最后执行安装 (Install) - 此时 feeds 目录已干净且修复
     install_feeds 
     
     fix_easytier_lua
