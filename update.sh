@@ -2,8 +2,7 @@
 #
 # Copyright (C) 2025 ZqinKing
 #
-# 定制精简版 - 保留 OpenClash/UPnP/Ttyd/Vlmcsd
-# 移除了：Passwall, AdGuardHome, HomeProxy, Lucky, SmartDNS, Nikki, USB相关, iStore等
+# 最终修正版 - 修复 OpenClash 不显示的问题
 #
 
 set -e
@@ -93,17 +92,17 @@ update_feeds() {
 }
 
 remove_unwanted_packages() {
-    # 这里定义我们要强制在 feeds 中删除的包，防止编译时冲突或误选
+    # 强制移除不想要的包
     local unwanted_packages=(
         "luci-app-passwall" "luci-app-homeproxy" "luci-app-nikki"
         "luci-app-adguardhome" "adguardhome"
         "luci-app-lucky" "lucky"
         "luci-app-smartdns" "smartdns"
-        "luci-app-diskman" "diskman" "parted" # USB/磁盘相关
-        "luci-app-dockerman" "docker" "dockerd" # Docker相关
+        "luci-app-diskman" "diskman" "parted"
+        "luci-app-dockerman" "docker" "dockerd"
         "luci-app-alist" "alist"
-        "luci-app-openclash" # 先删掉 feeds/luci 里的旧版本，后面会从 small8 安装新版
-        "luci-app-store" "luci-app-quickstart" # iStore相关
+        "luci-app-openclash" # 先删旧版，后面重装
+        "luci-app-store" "luci-app-quickstart"
         "luci-app-timecontrol" "luci-app-gecoosac"
     )
 
@@ -111,12 +110,10 @@ remove_unwanted_packages() {
         find ./feeds -name "$pkg" -type d -exec rm -rf {} +
     done
 
-    # 移除 istore 目录
     if [[ -d ./package/istore ]]; then
         \rm -rf ./package/istore
     fi
     
-    # 清理 USB 自动挂载相关的默认脚本
     if [ -d "$BUILD_DIR/target/linux/qualcommax/base-files/etc/uci-defaults" ]; then
         find "$BUILD_DIR/target/linux/qualcommax/base-files/etc/uci-defaults/" -type f -name "99*.sh" -exec rm -f {} +
     fi
@@ -134,29 +131,38 @@ update_golang() {
 }
 
 install_small8() {
-    # 只安装用户明确保留的 OpenClash 和基础依赖
-    # 注意：vlmcsd, ttyd, upnp 通常在 packages/base 源里，这里只从 small8 拉取 OpenClash 及其依赖
-    
-    # 安装 OpenClash (及其可能需要的核心依赖)
     ./scripts/feeds install -p small8 -f luci-app-openclash
-    
-    # 安装可能需要的网络工具 (sing-box/xray内核常被 OC 引用，根据 Config 决定是否编译，但需先 install)
     ./scripts/feeds install -p small8 -f xray-core xray-plugin sing-box
-    
-    # 安装其他常用小工具 (如果有覆盖需求)
     ./scripts/feeds install -p small8 -f fullconenat-nft fullconenat
-    
-    # 如果 config 里选了 vlmcsd/ttyd，确保它们可用。
-    # 通常这些在官方 feeds 都有，但为了保险起见，如果不冲突可以不操作，
-    # 或者如果 small8 版本更新，可以 install。这里仅保留最稳妥的 OC。
+}
+
+install_fullconenat() {
+    if [ ! -d $BUILD_DIR/package/network/utils/fullconenat-nft ]; then
+        ./scripts/feeds install -p small8 -f fullconenat-nft
+    fi
+    if [ ! -d $BUILD_DIR/package/network/utils/fullconenat ]; then
+        ./scripts/feeds install -p small8 -f fullconenat
+    fi
+}
+
+install_feeds() {
+    ./scripts/feeds update -i
+    for dir in $BUILD_DIR/feeds/*; do
+        if [ -d "$dir" ] && [[ ! "$dir" == *.tmp ]] && [[ ! "$dir" == *.index ]] && [[ ! "$dir" == *.targetindex ]]; then
+            if [[ $(basename "$dir") == "small8" ]]; then
+                install_small8
+                install_fullconenat
+            else
+                ./scripts/feeds install -f -ap $(basename "$dir")
+            fi
+        fi
+    done
 }
 
 check_default_settings() {
     local settings_dir="$BUILD_DIR/package/emortal/default-settings"
     if [ -z "$(find "$BUILD_DIR/package" -type d -name "default-settings" -print -quit 2>/dev/null)" ]; then
-        echo "在 $BUILD_DIR/package 中未找到 default-settings 目录，正在从 immortalwrt 仓库克隆..."
-        local tmp_dir
-        tmp_dir=$(mktemp -d)
+        local tmp_dir=$(mktemp -d)
         if git clone --depth 1 --filter=blob:none --sparse https://github.com/immortalwrt/immortalwrt.git "$tmp_dir"; then
             pushd "$tmp_dir" > /dev/null
             git sparse-checkout set package/emortal/default-settings
@@ -165,35 +171,18 @@ check_default_settings() {
             popd > /dev/null
             rm -rf "$tmp_dir"
         else
-            echo "错误：克隆 immortalwrt 仓库失败" >&2
-            rm -rf "$tmp_dir"
-            exit 1
+            rm -rf "$tmp_dir"; exit 1
         fi
     fi
 }
 
-install_feeds() {
-    ./scripts/feeds update -i
-    # 这里我们不再无脑安装所有 feeds，而是根据之前的 install_small8 按需安装
-    # 如果有 config 文件，make menuconfig/defconfig 会自动处理依赖
-    
-    # 显式安装 small8 中我们指定的包
-    install_small8
-    
-    # 安装其他所有 feeds 的包索引 (以便 .config 能找到它们)
-    ./scripts/feeds install -a
-}
-
 fix_default_set() {
-    # 修改默认主题
     if [ -d "$BUILD_DIR/feeds/luci/collections/" ]; then
         find "$BUILD_DIR/feeds/luci/collections/" -type f -name "Makefile" -exec sed -i "s/luci-theme-bootstrap/luci-theme-$THEME_SET/g" {} \;
     fi
-
     install -Dm544 "$BASE_PATH/patches/990_set_argon_primary" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/990_set_argon_primary"
     install -Dm544 "$BASE_PATH/patches/991_custom_settings" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/991_custom_settings"
     install -Dm544 "$BASE_PATH/patches/992_set-wifi-uci.sh" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/992_set-wifi-uci.sh"
-
     if [ -f "$BUILD_DIR/package/emortal/autocore/files/tempinfo" ]; then
         if [ -f "$BASE_PATH/patches/tempinfo" ]; then
             \cp -f "$BASE_PATH/patches/tempinfo" "$BUILD_DIR/package/emortal/autocore/files/tempinfo"
@@ -204,7 +193,6 @@ fix_default_set() {
 fix_miniupnpd() {
     local miniupnpd_dir="$BUILD_DIR/feeds/packages/net/miniupnpd"
     local patch_file="999-chanage-default-leaseduration.patch"
-
     if [ -d "$miniupnpd_dir" ] && [ -f "$BASE_PATH/patches/$patch_file" ]; then
         install -Dm644 "$BASE_PATH/patches/$patch_file" "$miniupnpd_dir/patches/$patch_file"
     fi
@@ -233,15 +221,12 @@ update_default_lan_addr() {
 remove_something_nss_kmod() {
     local ipq_mk_path="$BUILD_DIR/target/linux/qualcommax/Makefile"
     local target_mks=("$BUILD_DIR/target/linux/qualcommax/ipq60xx/target.mk" "$BUILD_DIR/target/linux/qualcommax/ipq807x/target.mk")
-
     for target_mk in "${target_mks[@]}"; do
         if [ -f "$target_mk" ]; then
             sed -i 's/kmod-qca-nss-crypto//g' "$target_mk"
         fi
     done
-
     if [ -f "$ipq_mk_path" ]; then
-        # 移除 NSS 相关驱动
         sed -i '/kmod-qca-nss-drv-eogremgr/d' "$ipq_mk_path"
         sed -i '/kmod-qca-nss-drv-gre/d' "$ipq_mk_path"
         sed -i '/kmod-qca-nss-drv-map-t/d' "$ipq_mk_path"
@@ -252,8 +237,6 @@ remove_something_nss_kmod() {
         sed -i '/kmod-qca-nss-drv-vxlanmgr/d' "$ipq_mk_path"
         sed -i '/kmod-qca-nss-drv-wifi-meshmgr/d' "$ipq_mk_path"
         sed -i '/kmod-qca-nss-macsec/d' "$ipq_mk_path"
-
-        # 移除 automount (USB自动挂载)
         sed -i 's/automount //g' "$ipq_mk_path"
         sed -i 's/cpufreq //g' "$ipq_mk_path"
     fi
@@ -261,7 +244,6 @@ remove_something_nss_kmod() {
 
 update_affinity_script() {
     local affinity_script_dir="$BUILD_DIR/target/linux/qualcommax"
-
     if [ -d "$affinity_script_dir" ]; then
         find "$affinity_script_dir" -name "set-irq-affinity" -exec rm -f {} \;
         find "$affinity_script_dir" -name "smp_affinity" -exec rm -f {} \;
@@ -273,9 +255,7 @@ update_ath11k_fw() {
     local makefile="$BUILD_DIR/package/firmware/ath11k-firmware/Makefile"
     local new_mk="$BASE_PATH/patches/ath11k_fw.mk"
     local url="https://raw.githubusercontent.com/VIKINGYFY/immortalwrt/refs/heads/main/package/firmware/ath11k-firmware/Makefile"
-
     if [ -d "$(dirname "$makefile")" ]; then
-        echo "正在更新 ath11k-firmware Makefile..."
         if ! curl -fsSL -o "$new_mk" "$url"; then
             echo "错误：从 $url 下载 ath11k-firmware Makefile 失败" >&2
             exit 1
@@ -284,12 +264,18 @@ update_ath11k_fw() {
     fi
 }
 
-# 必须保留：修复 OpenClash 等包的 Makefile 格式错误
+# ！！！核心修复点！！！
+# 这里去掉了 if 判断，强制执行修复
 fix_mkpkg_format_invalid() {
-    if [[ $BUILD_DIR =~ "imm-nss" ]]; then
-        if [ -f $BUILD_DIR/feeds/small8/luci-app-openclash/Makefile ]; then
-            sed -i 's/PKG_RELEASE:=beta/PKG_RELEASE:=1/g' $BUILD_DIR/feeds/small8/luci-app-openclash/Makefile
-        fi
+    if [ -f $BUILD_DIR/feeds/small8/luci-app-openclash/Makefile ]; then
+        echo "正在修复 OpenClash Makefile 版本号问题..."
+        sed -i 's/PKG_RELEASE:=beta/PKG_RELEASE:=1/g' $BUILD_DIR/feeds/small8/luci-app-openclash/Makefile
+    fi
+    if [ -f $BUILD_DIR/feeds/small8/v2ray-geodata/Makefile ]; then
+        sed -i 's/VER)-\$(PKG_RELEASE)/VER)-r\$(PKG_RELEASE)/g' $BUILD_DIR/feeds/small8/v2ray-geodata/Makefile
+    fi
+    if [ -f $BUILD_DIR/feeds/small8/luci-lib-taskd/Makefile ]; then
+        sed -i 's/>=1\.0\.3-1/>=1\.0\.3-r1/g' $BUILD_DIR/feeds/small8/luci-lib-taskd/Makefile
     fi
 }
 
@@ -309,17 +295,14 @@ change_cpuusage() {
     local luci_rpc_path="$BUILD_DIR/feeds/luci/modules/luci-base/root/usr/share/rpcd/ucode/luci"
     local qualcommax_sbin_dir="$BUILD_DIR/target/linux/qualcommax/base-files/sbin"
     local filogic_sbin_dir="$BUILD_DIR/target/linux/mediatek/filogic/base-files/sbin"
-
     if [ -f "$luci_rpc_path" ]; then
         sed -i "s#const fd = popen('top -n1 | awk \\\'/^CPU/ {printf(\"%d%\", 100 - \$8)}\\\'')#const cpuUsageCommand = access('/sbin/cpuusage') ? '/sbin/cpuusage' : 'top -n1 | awk \\\'/^CPU/ {printf(\"%d%\", 100 - \$8)}\\\''#g" "$luci_rpc_path"
         sed -i '/cpuUsageCommand/a \\t\t\tconst fd = popen(cpuUsageCommand);' "$luci_rpc_path"
     fi
-
     local old_script_path="$BUILD_DIR/package/base-files/files/sbin/cpuusage"
     if [ -f "$old_script_path" ]; then
         rm -f "$old_script_path"
     fi
-
     if [ -d "$BUILD_DIR/target/linux/qualcommax" ]; then
         install -Dm755 "$BASE_PATH/patches/cpuusage" "$qualcommax_sbin_dir/cpuusage"
     fi
@@ -347,7 +330,6 @@ install_opkg_distfeeds() {
     local emortal_def_dir="$BUILD_DIR/package/emortal/default-settings"
     local distfeeds_conf="$emortal_def_dir/files/99-distfeeds.conf"
     if [ -d "$emortal_def_dir" ] && [ ! -f "$distfeeds_conf" ]; then
-        # 创建默认源配置
         cat <<'EOF' >"$distfeeds_conf"
 src/gz openwrt_base https://downloads.immortalwrt.org/releases/24.10-SNAPSHOT/packages/aarch64_cortex-a53/base/
 src/gz openwrt_luci https://downloads.immortalwrt.org/releases/24.10-SNAPSHOT/packages/aarch64_cortex-a53/luci/
@@ -355,7 +337,6 @@ src/gz openwrt_packages https://downloads.immortalwrt.org/releases/24.10-SNAPSHO
 src/gz openwrt_routing https://downloads.immortalwrt.org/releases/24.10-SNAPSHOT/packages/aarch64_cortex-a53/routing/
 src/gz openwrt_telephony https://downloads.immortalwrt.org/releases/24.10-SNAPSHOT/packages/aarch64_cortex-a53/telephony/
 EOF
-        # 注入到安装流程
         sed -i "/define Package\/default-settings\/install/a\\
 \\t\$(INSTALL_DIR) \$(1)/etc\\n\
 \t\$(INSTALL_DATA) ./files/99-distfeeds.conf \$(1)/etc/99-distfeeds.conf\n" $emortal_def_dir/Makefile
@@ -386,7 +367,6 @@ update_nss_diag() {
 }
 
 update_menu_location() {
-    # 调整菜单位置，根据需求保留
     local samba4_path="$BUILD_DIR/feeds/luci/applications/luci-app-samba4/root/usr/share/luci/menu.d/luci-app-samba4.json"
     if [ -d "$(dirname "$samba4_path")" ] && [ -f "$samba4_path" ]; then
         sed -i 's/nas/services/g' "$samba4_path"
@@ -406,7 +386,6 @@ fix_compile_coremark() {
 
 update_oaf_deconfig() {
     local conf_path="$BUILD_DIR/feeds/small8/open-app-filter/files/appfilter.config"
-    local uci_def="$BUILD_DIR/feeds/small8/luci-app-oaf/root/etc/uci-defaults/94_feature_3.0"
     if [ -d "${conf_path%/*}" ] && [ -f "$conf_path" ]; then
         sed -i -e "s/record_enable '1'/record_enable '0'/g" -e "s/disable_hnat '1'/disable_hnat '0'/g" "$conf_path"
     fi
@@ -418,7 +397,6 @@ fix_rust_compile_error() {
     fi
 }
 
-# 设置 Nginx 默认配置
 set_nginx_default_config() {
     local nginx_config_path="$BUILD_DIR/feeds/packages/net/nginx-util/files/nginx.config"
     if [ -f "$nginx_config_path" ]; then
@@ -506,7 +484,6 @@ remove_attendedsysupgrade() {
 }
 
 update_script_priority() {
-    # 调整服务启动顺序
     local qca_drv_path="$BUILD_DIR/package/feeds/nss_packages/qca-nss-drv/files/qca-nss-drv.init"
     if [ -d "${qca_drv_path%/*}" ] && [ -f "$qca_drv_path" ]; then sed -i 's/START=.*/START=88/g' "$qca_drv_path"; fi
     local pbuf_path="$BUILD_DIR/package/kernel/mac80211/files/qca-nss-pbuf.init"
@@ -521,34 +498,31 @@ main() {
     remove_unwanted_packages
     remove_tweaked_packages
     
-    # 核心修复与设置
+    # 核心系统修复与 NSS 调整
     fix_default_set
     fix_miniupnpd
     update_golang
     change_dnsmasq2full
     fix_mk_def_depends
     update_default_lan_addr
-    remove_something_nss_kmod
+    
+    remove_something_nss_kmod 
     update_affinity_script
     update_ath11k_fw
-    fix_mkpkg_format_invalid # 保留：修复OpenClash编译错误
+    update_nss_pbuf_performance
+    update_nss_diag
+    update_script_priority
+    
+    # 修复 OpenClash Makefile 格式
+    fix_mkpkg_format_invalid
     change_cpuusage
     
     add_ax6600_led
     set_custom_task
-    
-    # 已移除大量插件的 specific update 函数 (HomeProxy, AdGuardHome, Lucky, SmartDNS 等)
-    
-    update_nss_pbuf_performance
     set_build_signature
-    update_nss_diag
     update_menu_location
     fix_compile_coremark
-    
-    # 已移除 iStore/QuickStart/Diskman 等
-    
     update_oaf_deconfig
-    
     fix_rust_compile_error
     set_nginx_default_config
     update_uwsgi_limit_as
@@ -558,11 +532,10 @@ main() {
     install_opkg_distfeeds
     fix_easytier_mk
     remove_attendedsysupgrade
-    install_feeds # 这里会调用精简后的 install_small8
-    fix_easytier_lua
-    update_script_priority
     
-    # 已移除 Docker 更新
+    install_feeds 
+    
+    fix_easytier_lua
 }
 
 main "$@"
