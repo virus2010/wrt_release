@@ -45,7 +45,7 @@ main() {
     remove_unwanted_packages
     remove_tweaked_packages
     install_custom_feed
-    update_homeproxy
+#    update_homeproxy
     rm -rf package/feeds/packages/dockerd
     rm -rf package/feeds/luci/luci-app-dockerman
     fix_default_set
@@ -73,7 +73,7 @@ main() {
     add_backup_info_to_sysupgrade
 #    update_mosdns_deconfig
     fix_quickstart
-    update_oaf_deconfig
+#    update_oaf_deconfig
     add_timecontrol
     add_quickfile
 #    update_lucky
@@ -87,21 +87,21 @@ main() {
     update_nginx_ubus_module
     check_default_settings
     install_opkg_distfeeds
-    fix_easytier_mk
+#    fix_easytier_mk
     remove_attendedsysupgrade
     fix_kconfig_recursive_dependency
     install_feeds
     verify_custom_feed_installed_paths
-    docker_stack_sync_nftables_compat "$BUILD_DIR" "0"
-    fix_cups_libcups_avahi_depends
-    fix_easytier_lua
+#    docker_stack_sync_nftables_compat "$BUILD_DIR" "0"
+#    fix_cups_libcups_avahi_depends
+#    fix_easytier_lua
 #    update_adguardhome
     update_script_priority
     update_geoip
     fix_openssl_ktls
     fix_opkg_check
     fix_netfilter_kmod_clash
-    fix_quectel_cm
+#    fix_quectel_cm
     install_pbr_cmcc
     fix_pbr_ip_forward
     # apply_hash_fixes
