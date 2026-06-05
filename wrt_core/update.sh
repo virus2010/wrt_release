@@ -46,6 +46,8 @@ main() {
     remove_tweaked_packages
     install_custom_feed
     update_homeproxy
+    rm -rf package/feeds/packages/dockerd
+    rm -rf package/feeds/luci/luci-app-dockerman
     fix_default_set
     fix_miniupnpd
     update_golang
