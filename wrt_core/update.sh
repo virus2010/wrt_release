@@ -69,16 +69,16 @@ main() {
     fix_compile_coremark
     update_dnsmasq_conf
     add_backup_info_to_sysupgrade
-    update_mosdns_deconfig
+#    update_mosdns_deconfig
     fix_quickstart
     update_oaf_deconfig
     add_timecontrol
     add_quickfile
-    update_lucky
+#    update_lucky
     fix_rust_compile_error
-    update_smartdns
-    update_diskman
-    update_dockerman
+#    update_smartdns
+#    update_diskman
+#    update_dockerman
     set_nginx_default_config
     update_uwsgi_limit_as
     update_argon
@@ -93,7 +93,7 @@ main() {
     docker_stack_sync_nftables_compat "$BUILD_DIR" "0"
     fix_cups_libcups_avahi_depends
     fix_easytier_lua
-    update_adguardhome
+#    update_adguardhome
     update_script_priority
     update_geoip
     fix_openssl_ktls
