@@ -92,8 +92,6 @@ main() {
     fix_kconfig_recursive_dependency
     install_feeds
     
-#    在整个 package 目录下搜索并彻底物理删除不需要的插件目录
-    find package/ -type d \( -name "luci-app-easytier" -o -name "luci-app-lucky" -o -name "luci-app-mosdns" -o -name "luci-app-oaf" -o -name "luci-app-passwall" -o -name "luci-app-pbr" -o -name "luci-app-smartdns" -o -name "luci-app-wol" \) -exec rm -rf {} +
 
     verify_custom_feed_installed_paths
     verify_custom_feed_installed_paths
